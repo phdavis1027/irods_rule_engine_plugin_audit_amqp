@@ -30,10 +30,26 @@
 
 // =-=-=-=-=-=-=-
 // proton includes
+/*
 #include <proton/message.h>
 #include <proton/messenger.h>
+#include <proton/sender.hpp>
+*/
 
 #include <jansson.h>
+
+// proton-cpp includes
+#include <proton/connection.hpp>
+#include <proton/container.hpp>
+#include <proton/listen_handler.hpp>
+#include <proton/listener.hpp>
+#include <proton/message.hpp>
+#include <proton/message_id.hpp>
+#include <proton/messaging_handler.hpp>
+#include <proton/value.hpp>
+#include <proton/tracker.hpp>
+#include <proton/types.hpp>
+#include <proton/sender.hpp>
 
 static std::string audit_pep_regex_to_match = "audit_.*";
 static std::string audit_amqp_topic         = "irods_audit_messages";
@@ -41,13 +57,48 @@ static std::string audit_amqp_location      = "localhost:5672";
 static std::string audit_amqp_options       = "";
 static std::string log_path_prefix          = "/tmp";
 static bool test_mode                       = false;
-static std::ofstream log_file_ofstream; 
+sttic std::ofstream log_file_ofstream;
 
-static pn_messenger_t * messenger = nullptr;
+// static pn_messenger_t * messenger = nullptr;
 
 static std::mutex  audit_plugin_mutex;
+const static std::string url    =  audit_amqp_location + std::string("/") + audit_amqp_topic;
 
+// See qpid-cpp docs (https://qpid.apache.org/releases/qpid-proton-0.27.0/proton/cpp/api/simple_send_8cpp-example.html)
+// Phillip Davis, 7/5/22
+class send_handler : public proton::messaging_handler {
+    private:
+        std::string url;
+        proton::sender sender;
+        std::string message;
+
+    public:
+        send_handler(
+            const std::string& _url,
+            const std::string& _message
+        ) : url(_url)
+            ,message(_message)
+        { }
+
+        send_handler(){ }
+
+        void on_container_start(proton::container &c) override {
+            sender = c.open_sender(url);
+        }
+
+        void on_tracker_accept(proton::tracker& t) override {
+            t.connection().close(); // we're only sending one message
+                                    // so we don't care about the credit system
+                                    // or tracking confirmed messages
+        }
+
+        void on_sendable(proton::sender &s) override {
+            proton::message m(message);
+            s.send(m);
+        }
+};
 // Insert the key arg into arg_map and storing the number of insertions of arg as the value.
+
 // The value (number of insertions) is returned.
 int insert_arg_into_counter_map(std::map<std::string, int>& arg_map, const std::string& arg) {
     std::map<std::string, int>::iterator iter = arg_map.find(arg);
@@ -77,7 +128,7 @@ irods::error get_re_configs(
                     audit_amqp_location       = plugin_spec_cfg.at("amqp_location").get<std::string>();
                     audit_amqp_options        = plugin_spec_cfg.at("amqp_options").get<std::string>();
 
-                    // look for a test mode setting.  if it doesn't exist just keep test_mode at false.                    
+                    // look for a test mode setting.  if it doesn't exist just keep test_mode at false.
                     // if test_mode = true and log_path_prefix isn't set just leave the default
                     try {
                         const std::string& test_mode_str = plugin_spec_cfg.at("test_mode").get_ref<const std::string&>();
@@ -86,7 +137,7 @@ irods::error get_re_configs(
                              log_path_prefix  = plugin_spec_cfg.at("log_path_prefix").get<std::string>();
                         }
                     } catch (const std::out_of_range& e1) {}
- 
+
                 } else {
                     rodsLog(
                         LOG_DEBUG,
@@ -123,10 +174,12 @@ irods::error start(irods::default_re_ctx& _u,const std::string& _instance_name) 
         irods::log(PASS(ret));
     }
 
+    /*
     messenger = pn_messenger(NULL);
     pn_messenger_start(messenger);
     pn_messenger_set_blocking(messenger, false);  // do not block
-    
+    */
+
     json_t* obj = json_object();
     if( !obj ) {
         return ERROR(SYS_MALLOC_ERR, "json_object() failed");
@@ -160,7 +213,9 @@ irods::error start(irods::default_re_ctx& _u,const std::string& _instance_name) 
     pn_message_t * message;
     pn_data_t * body;
 
+    /*
     message = pn_message();
+
 
     std::string address = audit_amqp_location + "/" + audit_amqp_topic;
 
@@ -169,14 +224,19 @@ irods::error start(irods::default_re_ctx& _u,const std::string& _instance_name) 
     pn_data_put_string(body, pn_bytes(msg_str.length(), msg_str.c_str()));
     pn_messenger_put(messenger, message);
     pn_messenger_send(messenger, -1);
-    
+
     pn_message_free(message);
+    */
+    // send_proton_message(msg_str);
+
+    send_handler s(url, msg_str);
+    proton::container(s).run();
 
     free(tmp_buf);
     json_decref(obj);
 
     if (test_mode) {
-        //std::ofstream log_file_ofstream; 
+        //std::ofstream log_file_ofstream;
         log_file_ofstream.open(log_file);
         log_file_ofstream << msg_str << std::endl;
     }
@@ -219,6 +279,7 @@ irods::error stop(irods::default_re_ctx& _u,const std::string& _instance_name) {
     char* tmp_buf = json_dumps( obj, JSON_INDENT( 0 ) );
     std::string msg_str = std::string("__BEGIN_JSON__") + std::string(tmp_buf) + std::string("__END_JSON__");
 
+    /*
     pn_message_t * message;
     pn_data_t * body;
 
@@ -231,14 +292,22 @@ irods::error stop(irods::default_re_ctx& _u,const std::string& _instance_name) {
     pn_data_put_string(body, pn_bytes(msg_str.length(), msg_str.c_str()));
     pn_messenger_put(messenger, message);
     pn_messenger_send(messenger, -1);
-   
+
     pn_message_free(message);
+
+    */
+
+   // send_proton_message(msg_str);
+    send_handler s(url, msg_str);
+    proton::container(s).run();
 
     free(tmp_buf);
     json_decref(obj);
 
+    /*
     pn_messenger_stop(messenger);
     pn_messenger_free(messenger);
+    */
 
     if (test_mode) {
         log_file_ofstream << msg_str << std::endl;
@@ -261,7 +330,7 @@ irods::error rule_exists(irods::default_re_ctx&, const std::string& _rn, bool& _
                 SYS_INTERNAL_ERR,
                 what.c_str() );
     }
-    
+
     return SUCCESS();
 }
 
@@ -349,7 +418,7 @@ irods::error exec_rule(
             size_t ctr = insert_arg_into_counter_map(arg_type_map, elem.first);
             std::stringstream ctr_str;
             ctr_str << ctr;
-            
+
             std::string key = elem.first;
             if (ctr > 1) {
                 key += "__";
@@ -361,15 +430,19 @@ irods::error exec_rule(
                 key.c_str(),
                 json_string(elem.second.c_str()));
 
-            ++ctr; 
+            ++ctr;
             ctr_str.clear();
 
         } // for elem
     } // for itr
 
     char* tmp_buf = json_dumps( obj, JSON_INDENT( 0 ) );
-    std::string msg_str = std::string("__BEGIN_JSON__") + std::string(tmp_buf) + std::string("__END_JSON__");
+    std::string msg_str = std::string(tmp_buf);
 
+    send_handler s(url, msg_str);
+    proton::container(s).run();
+
+/*
     pn_message_t * message;
     pn_data_t * body;
 
@@ -382,8 +455,9 @@ irods::error exec_rule(
     pn_data_put_string(body, pn_bytes(msg_str.length(), msg_str.c_str()));
     pn_messenger_put(messenger, message);
     pn_messenger_send(messenger, -1);
-    
+
     pn_message_free(message);
+*/
 
     free(tmp_buf);
     json_decref(obj);
